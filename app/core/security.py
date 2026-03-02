@@ -24,3 +24,12 @@ class CryptoManager:
         cipher_rsa = PKCS1_OAEP.new(recipient_key)
         enc_data = cipher_rsa.encrypt(data.encode())
         return base64.b64encode(enc_data).decode()
+    
+    # Добавить в класс CryptoManager:
+    @staticmethod
+    def decrypt_data(encrypted_data: str, private_key_str: bytes) -> str:
+        """Дешифрование данных RSA."""
+        private_key = RSA.import_key(private_key_str)
+        cipher_rsa = PKCS1_OAEP.new(private_key)
+        decoded_data = base64.b64decode(encrypted_data)
+        return cipher_rsa.decrypt(decoded_data).decode()
