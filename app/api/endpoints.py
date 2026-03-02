@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel
+
 from app.database.session import SessionLocal
-from app.schemas.domain import UserCreate, AccountCreate
-from app.models.domain import User, Account
+from app.models.domain import User, Account, Debt
+from app.services.crypto_service import EncryptionService
 from app.core.security import CryptoManager
-from app.services.account_service import create_user_account
 
 router = APIRouter()
 
@@ -13,59 +16,40 @@ def get_db():
     try: yield db
     finally: db.close()
 
-@router.post("/users/")
-def register_user(user: UserCreate, db: Session = Depends(get_db)):
-    # 1. SHA-256 для пароля
-    hashed = CryptoManager.hash_password(user.password)
-    # 2. RSA ключи
-    priv, pub = CryptoManager.generate_rsa_keys()
-    
-    db_user = User(username=user.username, hashed_password=hashed, public_key=pub.decode())
-    db.add(db_user)
-    db.commit()
-    # ВАЖНО: Приватный ключ 'priv' нужно отдать пользователю ОДИН РАЗ (он не хранится в БД)
-    return {"status": "created", "private_key": priv.decode()}
+# --- Schemas ---
+class DebtCreate(BaseModel):
+    person_name: str
+    amount: float
+    is_my_debt: bool = True
+    due_date: Optional[datetime] = None
+    user_id: int
 
-@router.post("/accounts/{user_id}")
-def add_account(user_id: int, acc: AccountCreate, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user: raise HTTPException(404, "User not found")
+# --- Endpoints ---
+@router.post("/debts/", status_code=201)
+def add_debt(debt_data: DebtCreate, db: Session = Depends(get_db)):
+    # 1. Проверка пользователя
+    user = db.query(User).filter(User.id == debt_data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     
-    new_acc = create_user_account(db, acc.name, acc.initial_balance, user_id, user.public_key.encode())
-    return {"id": new_acc.id, "name": new_acc.name}
-
-@router.post("/transactions/")
-def create_transaction(
-    acc_id: int, 
-    amount: float, 
-    t_type: str, 
-    db: Session = Depends(get_db)
-):
-    account = db.query(Account).filter(Account.id == acc_id).first()
-    if not account: raise HTTPException(404, "Account not found")
+    # 2. Шифрование суммы
+    try:
+        crypto = EncryptionService(user_public_key=user.public_key.encode())
+        enc_amount = crypto.encrypt_amount(debt_data.amount)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Encryption error: {str(e)}")
     
-    # Получаем публичный ключ владельца счета
-    user = db.query(User).filter(User.id == account.user_id).first()
-    crypto = EncryptionService(user_public_key=user.public_key.encode())
-    
-    enc_amount = crypto.encrypt_amount(amount)
-    
-    new_trans = Transaction(
+    # 3. Сохранение в БД
+    new_debt = Debt(
+        person_name=debt_data.person_name,
         encrypted_amount=enc_amount,
-        type=t_type,
-        account_id=acc_id
+        is_my_debt=debt_data.is_my_debt,
+        due_date=debt_data.due_date,
+        user_id=debt_data.user_id
     )
-    db.add(new_trans)
+    
+    db.add(new_debt)
     db.commit()
-    return {"status": "success", "transaction_id": new_trans.id}
-
-@router.post("/accounts/{acc_id}/balance")
-def get_balance(acc_id: int, private_key: str, db: Session = Depends(get_db)):
-    account = db.query(Account).filter(Account.id == acc_id).first()
-    if not account: raise HTTPException(404, "Account not found")
+    db.refresh(new_debt)
     
-    # Получаем все транзакции счета
-    transactions = account.transactions
-    balance = ReportService.calculate_balance(transactions, private_key)
-    
-    return {"account": account.name, "balance": float(balance)}
+    return {"status": "success", "debt_id": new_debt.id}
