@@ -1,104 +1,101 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
-from sqlalchemy.orm import Session
-from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel
+import datetime
+import enum
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum
+from sqlalchemy.orm import relationship
+from app.database.session import Base
 
-from app.database.session import SessionLocal
-from app.models.domain import User, Account, Debt
-from app.services.crypto_service import EncryptionService
-from app.core.security import CryptoManager
+# --- Перечисления ---
+class TransactionType(enum.Enum):
+    INCOME = "income"
+    EXPENSE = "expense"
+    TRANSFER = "transfer"
 
-router = APIRouter()
+# --- Модели ---
 
-def get_db():
-    db = SessionLocal()
-    try: yield db
-    finally: db.close()
-
-# --- Schemas ---
-class DebtCreate(BaseModel):
-    person_name: str
-    amount: float
-    is_my_debt: bool = True
-    due_date: Optional[datetime] = None
-    user_id: int
-
-# --- Endpoints ---
-@router.post("/debts/", status_code=201)
-def add_debt(debt_data: DebtCreate, db: Session = Depends(get_db)):
-    # 1. Проверка пользователя
-    user = db.query(User).filter(User.id == debt_data.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+class User(Base):
+    """Пользователь системы с RSA ключом для дешифровки своих данных."""
+    __tablename__ = "users"
     
-    # 2. Шифрование суммы
-    try:
-        crypto = EncryptionService(user_public_key=user.public_key.encode())
-        enc_amount = crypto.encrypt_amount(debt_data.amount)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Encryption error: {str(e)}")
-    
-    # 3. Сохранение в БД
-    new_debt = Debt(
-        person_name=debt_data.person_name,
-        encrypted_amount=enc_amount,
-        is_my_debt=debt_data.is_my_debt,
-        due_date=debt_data.due_date,
-        user_id=debt_data.user_id
-    )
-    
-    db.add(new_debt)
-    db.commit()
-    db.refresh(new_debt)
-    
-    return {"status": "success", "debt_id": new_debt.id}
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)  # SHA-256
+    public_key = Column(String, nullable=False)       # RSA Public Key
 
-@router.post("/transfers/")
-def create_transfer(transfer: TransferCreate, db: Session = Depends(get_db)):
-    # 1. Проверка существования счетов
-    acc_from = db.query(Account).filter(Account.id == transfer.from_account_id).first()
-    acc_to = db.query(Account).filter(Account.id == transfer.to_account_id).first()
+    # Отношения
+    accounts = relationship("Account", back_populates="owner", cascade="all, delete-orphan")
+    debts = relationship("Debt", back_populates="user", cascade="all, delete-orphan")
+    categories = relationship("Category", back_populates="user", cascade="all, delete-orphan")
+
+
+class Currency(Base):
+    """Справочник валют и их курсов к базовой валюте."""
+    __tablename__ = "currencies"
     
-    if not acc_from or not acc_to:
-        raise HTTPException(status_code=404, detail="One or both accounts not found")
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(3), unique=True, nullable=False, index=True) # USD, RUB
+    rate_to_base = Column(String, default="1.0") # Курс (строка для Decimal)
 
-    # 2. Получаем ключ пользователя (владельца счетов)
-    user = db.query(User).filter(User.id == acc_from.user_id).first()
-    crypto = EncryptionService(user_public_key=user.public_key.encode())
+    accounts = relationship("Account", back_populates="currency")
+
+
+class Account(Base):
+    """Счета пользователя (карты, наличные, вклады)."""
+    __tablename__ = "accounts"
     
-    # 3. Шифруем суммы для двух записей
-    enc_amount = crypto.encrypt_amount(transfer.amount)
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    encrypted_balance = Column(String, nullable=False) # RSA зашифровано
+    
+    user_id = Column(Integer, ForeignKey("users.id"))
+    currency_id = Column(Integer, ForeignKey("currencies.id"))
+    
+    # Отношения
+    owner = relationship("User", back_populates="accounts")
+    currency = relationship("Currency", back_populates="accounts")
+    transactions = relationship("Transaction", back_populates="account", cascade="all, delete-orphan")
 
-    try:
-        # Атомарная операция в БД
-        with db.begin_nested():
-            # Запись 1: Списание
-            t_from = Transaction(
-                encrypted_amount=enc_amount,
-                type=TransactionType.EXPENSE,
-                account_id=transfer.from_account_id,
-                category_id=transfer.category_id
-            )
-            # Запись 2: Зачисление
-            t_to = Transaction(
-                encrypted_amount=enc_amount,
-                type=TransactionType.INCOME,
-                account_id=transfer.to_account_id,
-                category_id=transfer.category_id
-            )
-            db.add_all([t_from, t_to])
-        
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Transfer failed: {str(e)}")
 
-    return {"status": "success", "message": "Transfer completed"}
+class Category(Base):
+    """Категории операций с поддержкой вложенности (Дерево)."""
+    __tablename__ = "categories"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
 
-@router.post("/currencies/")
-def add_currency(code: str, rate: float, db: Session = Depends(get_db)):
-    db_curr = Currency(code=code.upper(), rate_to_base=str(rate))
-    db.add(db_curr)
-    db.commit()
-    return {"status": "success", "id": db_curr.id}
+    # Отношения
+    user = relationship("User", back_populates="categories")
+    subcategories = relationship("Category", remote_side=[id])
+    transactions = relationship("Transaction", back_populates="category")
+
+
+class Transaction(Base):
+    """Движение денежных средств."""
+    __tablename__ = "transactions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    encrypted_amount = Column(String, nullable=False) # RSA зашифровано
+    type = Column(Enum(TransactionType), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    account_id = Column(Integer, ForeignKey("accounts.id"))
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    
+    # Отношения
+    account = relationship("Account", back_populates="transactions")
+    category = relationship("Category", back_populates="transactions")
+
+
+class Debt(Base):
+    """Учет долгов и кредитов."""
+    __tablename__ = "debts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    person_name = Column(String, nullable=False)
+    encrypted_amount = Column(String, nullable=False) # RSA зашифровано
+    is_my_debt = Column(Boolean, default=True)      # True - я должен, False - мне должны
+    due_date = Column(DateTime, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    user = relationship("User", back_populates="debts")
