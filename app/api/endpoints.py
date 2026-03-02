@@ -95,3 +95,10 @@ def create_transfer(transfer: TransferCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Transfer failed: {str(e)}")
 
     return {"status": "success", "message": "Transfer completed"}
+
+@router.post("/currencies/")
+def add_currency(code: str, rate: float, db: Session = Depends(get_db)):
+    db_curr = Currency(code=code.upper(), rate_to_base=str(rate))
+    db.add(db_curr)
+    db.commit()
+    return {"status": "success", "id": db_curr.id}
