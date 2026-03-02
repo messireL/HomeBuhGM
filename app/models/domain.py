@@ -20,3 +20,24 @@ class Account(Base):
     owner = relationship("User", back_populates="accounts")
 
 User.accounts = relationship("Account", back_populates="owner")
+
+from sqlalchemy import Enum
+import enum
+
+class TransactionType(enum.Enum):
+    INCOME = "income"
+    EXPENSE = "expense"
+    TRANSFER = "transfer"
+
+class Transaction(Base):
+    __tablename__ = "transactions"
+    id = Column(Integer, primary_key=True, index=True)
+    encrypted_amount = Column(String)  # RSA зашифрованная сумма
+    type = Column(String)              # Тип из TransactionType
+    category_id = Column(Integer, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"))
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    account = relationship("Account", back_populates="transactions")
+
+Account.transactions = relationship("Transaction", back_populates="account")
