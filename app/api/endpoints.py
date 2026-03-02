@@ -58,3 +58,14 @@ def create_transaction(
     db.add(new_trans)
     db.commit()
     return {"status": "success", "transaction_id": new_trans.id}
+
+@router.post("/accounts/{acc_id}/balance")
+def get_balance(acc_id: int, private_key: str, db: Session = Depends(get_db)):
+    account = db.query(Account).filter(Account.id == acc_id).first()
+    if not account: raise HTTPException(404, "Account not found")
+    
+    # Получаем все транзакции счета
+    transactions = account.transactions
+    balance = ReportService.calculate_balance(transactions, private_key)
+    
+    return {"account": account.name, "balance": float(balance)}
