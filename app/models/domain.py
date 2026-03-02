@@ -66,4 +66,28 @@ class Debt(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     
     user = relationship("User", back_populates="debts")
+
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+class AccountCreate(BaseModel):
+    name: str
+    initial_balance: float = 0.0
+
+class TransactionCreate(BaseModel):
+    account_id: int
+    category_id: int
+    amount: float
+    type: str  # income, expense, transfer
+
+class TransferCreate(BaseModel):
+    from_account_id: int
+    to_account_id: int
+    amount: float
+    category_id: Optional[int] = None  # Например, "Внутренний перевод"
     

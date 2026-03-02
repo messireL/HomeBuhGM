@@ -53,3 +53,45 @@ def add_debt(debt_data: DebtCreate, db: Session = Depends(get_db)):
     db.refresh(new_debt)
     
     return {"status": "success", "debt_id": new_debt.id}
+
+@router.post("/transfers/")
+def create_transfer(transfer: TransferCreate, db: Session = Depends(get_db)):
+    # 1. Проверка существования счетов
+    acc_from = db.query(Account).filter(Account.id == transfer.from_account_id).first()
+    acc_to = db.query(Account).filter(Account.id == transfer.to_account_id).first()
+    
+    if not acc_from or not acc_to:
+        raise HTTPException(status_code=404, detail="One or both accounts not found")
+
+    # 2. Получаем ключ пользователя (владельца счетов)
+    user = db.query(User).filter(User.id == acc_from.user_id).first()
+    crypto = EncryptionService(user_public_key=user.public_key.encode())
+    
+    # 3. Шифруем суммы для двух записей
+    enc_amount = crypto.encrypt_amount(transfer.amount)
+
+    try:
+        # Атомарная операция в БД
+        with db.begin_nested():
+            # Запись 1: Списание
+            t_from = Transaction(
+                encrypted_amount=enc_amount,
+                type=TransactionType.EXPENSE,
+                account_id=transfer.from_account_id,
+                category_id=transfer.category_id
+            )
+            # Запись 2: Зачисление
+            t_to = Transaction(
+                encrypted_amount=enc_amount,
+                type=TransactionType.INCOME,
+                account_id=transfer.to_account_id,
+                category_id=transfer.category_id
+            )
+            db.add_all([t_from, t_to])
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Transfer failed: {str(e)}")
+
+    return {"status": "success", "message": "Transfer completed"}
