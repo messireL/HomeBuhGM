@@ -66,8 +66,11 @@ class Category(Base):
 
     # Отношения
     user = relationship("User", back_populates="categories")
-    subcategories = relationship("Category", remote_side=[id])
+    # Исправленная логика иерархии
+    parent = relationship("Category", remote_side=[id], back_populates="subcategories")
+    subcategories = relationship("Category", back_populates="parent", cascade="all, delete-orphan")
     transactions = relationship("Transaction", back_populates="category")
+
 
 
 class Transaction(Base):
@@ -76,7 +79,8 @@ class Transaction(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     encrypted_amount = Column(String, nullable=False) # RSA зашифровано
-    type = Column(Enum(TransactionType), nullable=False)
+    # Добавлено имя для Enum, чтобы PostgreSQL не выдавал ошибку
+    type = Column(Enum(TransactionType, name="transaction_type_enum"), nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     account_id = Column(Integer, ForeignKey("accounts.id"))
