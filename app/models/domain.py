@@ -1,93 +1,101 @@
+import datetime
+import enum
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum
 from sqlalchemy.orm import relationship
 from app.database.session import Base
-import datetime
-import enum
 
-# --- Enums ---
+# --- Перечисления ---
 class TransactionType(enum.Enum):
     INCOME = "income"
     EXPENSE = "expense"
     TRANSFER = "transfer"
 
-# --- Models ---
+# --- Модели ---
 
 class User(Base):
+    """Пользователь системы с RSA ключом для дешифровки своих данных."""
     __tablename__ = "users"
+    
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)  # SHA-256
-    public_key = Column(String)       # Для RSA
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)  # SHA-256
+    public_key = Column(String, nullable=False)       # RSA Public Key
 
-    accounts = relationship("Account", back_populates="owner")
-    debts = relationship("Debt", back_populates="user")
-    categories = relationship("Category", back_populates="user")
+    # Отношения
+    accounts = relationship("Account", back_populates="owner", cascade="all, delete-orphan")
+    debts = relationship("Debt", back_populates="user", cascade="all, delete-orphan")
+    categories = relationship("Category", back_populates="user", cascade="all, delete-orphan")
+
+
+class Currency(Base):
+    """Справочник валют и их курсов к базовой валюте."""
+    __tablename__ = "currencies"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(3), unique=True, nullable=False, index=True) # USD, RUB
+    rate_to_base = Column(String, default="1.0") # Курс (строка для Decimal)
+
+    accounts = relationship("Account", back_populates="currency")
+
 
 class Account(Base):
+    """Счета пользователя (карты, наличные, вклады)."""
     __tablename__ = "accounts"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    encrypted_balance = Column(String)
-    user_id = Column(Integer, ForeignKey("users.id"))
     
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    encrypted_balance = Column(String, nullable=False) # RSA зашифровано
+    
+    user_id = Column(Integer, ForeignKey("users.id"))
+    currency_id = Column(Integer, ForeignKey("currencies.id"))
+    
+    # Отношения
     owner = relationship("User", back_populates="accounts")
-    transactions = relationship("Transaction", back_populates="account")
+    currency = relationship("Currency", back_populates="accounts")
+    transactions = relationship("Transaction", back_populates="account", cascade="all, delete-orphan")
+
 
 class Category(Base):
+    """Категории операций с поддержкой вложенности (Дерево)."""
     __tablename__ = "categories"
+    
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"))
 
+    # Отношения
     user = relationship("User", back_populates="categories")
-    subcategories = relationship("Category")
+    subcategories = relationship("Category", remote_side=[id])
     transactions = relationship("Transaction", back_populates="category")
 
-class Transaction(Base):
-    __tablename__ = "transactions"
-    id = Column(Integer, primary_key=True, index=True)
-    encrypted_amount = Column(String)
-    type = Column(Enum(TransactionType)) 
-    category_id = Column(Integer, ForeignKey("categories.id"), index=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"))
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class Transaction(Base):
+    """Движение денежных средств."""
+    __tablename__ = "transactions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    encrypted_amount = Column(String, nullable=False) # RSA зашифровано
+    type = Column(Enum(TransactionType), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    account_id = Column(Integer, ForeignKey("accounts.id"))
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    
+    # Отношения
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
 
+
 class Debt(Base):
+    """Учет долгов и кредитов."""
     __tablename__ = "debts"
+    
     id = Column(Integer, primary_key=True, index=True)
     person_name = Column(String, nullable=False)
-    encrypted_amount = Column(String)
-    is_my_debt = Column(Boolean, default=True)
+    encrypted_amount = Column(String, nullable=False) # RSA зашифровано
+    is_my_debt = Column(Boolean, default=True)      # True - я должен, False - мне должны
     due_date = Column(DateTime, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     
     user = relationship("User", back_populates="debts")
-
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
-
-class UserCreate(BaseModel):
-    username: str
-    password: str
-
-class AccountCreate(BaseModel):
-    name: str
-    initial_balance: float = 0.0
-
-class TransactionCreate(BaseModel):
-    account_id: int
-    category_id: int
-    amount: float
-    type: str  # income, expense, transfer
-
-class TransferCreate(BaseModel):
-    from_account_id: int
-    to_account_id: int
-    amount: float
-    category_id: Optional[int] = None  # Например, "Внутренний перевод"
-    
