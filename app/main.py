@@ -1,28 +1,28 @@
 from fastapi import FastAPI
 from app.api.endpoints import router
 from app.database.session import engine, Base
-from app.models import domain  # Импорт для регистрации моделей в Base
+# Важно импортировать все модели для их создания в БД
+from app.models import domain 
 
-# Автоматическое создание таблиц при старте (для Alpha-версии)
-# В продакшене рекомендуется использовать Alembic
+# Автоматическое создание таблиц
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Secure Home Accounting",
-    description="Веб-приложение Домашняя бухгалтерия с шифрованием RSA/SHA",
-    version="0.4.0-alpha"
+    title="Home Accounting System",
+    description="Система учета финансов с RSA-шифрованием данных",
+    version="0.9.2-alpha"
 )
 
-# Подключение маршрутов API
+# Подключение маршрутов
 app.include_router(router, prefix="/api/v1")
 
-@app.get("/", tags=["Root"])
-def read_root():
-    """Приветственное сообщение и проверка работоспособности."""
+@app.get("/", tags=["Health"])
+def health_check():
+    """Проверка доступности сервиса."""
     return {
-        "status": "online",
-        "message": "Система Домашней Бухгалтерии готова к работе",
-        "docs": "/docs"
+        "status": "active", 
+        "version": "0.9.2-alpha",
+        "database": "connected"
     }
 
 if __name__ == "__main__":

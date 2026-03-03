@@ -1,23 +1,32 @@
-version: '3.8'
+сversion: '3.8'
+
 services:
   db:
-    image: postgres:15
-    volumes:
-      - postgres_data:/var/lib/postgresql/data/
-    env_file:
-      - .env
+    image: postgres:15-alpine
+    container_name: hbk_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DB: ${POSTGRES_DB:-hbk_db}
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   web:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: hbk_web
+    restart: always
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - .:/code
     ports:
       - "8000:8000"
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@db:5432/${POSTGRES_DB:-hbk_db}
     depends_on:
       - db
 
